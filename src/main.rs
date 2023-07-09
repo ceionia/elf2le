@@ -141,14 +141,16 @@ fn write_le_header(new_header: &LEHeader, le_stub: &mut std::fs::File) -> std::r
     // Fixup record table offset 6Ch
     le_stub.write_at(&(fixup_record_table_offset as u32 - le_header_offset as u32).to_le_bytes(), le_header_offset + 0x6C)?;
     // Data pages offset 80h
-    let data_pages_offset = 0x1000 +
-        ((new_header.fixup_records.len() + new_header.fixup_page_offsets.len() * 4 + 0x68 + le_header_offset as usize) / 0x1000) * 0x1000;
+    //let data_pages_offset = 0x1000 +
+    //    ((new_header.fixup_records.len() + new_header.fixup_page_offsets.len() * 4 + 0x68 + le_header_offset as usize) / 0x1000) * 0x1000;
+    //le_stub.write_at(&(data_pages_offset as u32).to_le_bytes(), le_header_offset + 0x80)?;
+    let data_pages_offset = ((le_stub.stream_position()? >> 12) + 1) << 12;
     le_stub.write_at(&(data_pages_offset as u32).to_le_bytes(), le_header_offset + 0x80)?;
 
     Ok(data_pages_offset as u32)
 }
 
-fn output_le_relocations(obj_file: &object::File, le_header: &mut LEHeader) {
+fn output_le_relocations(obj_file: &object::File, le_header: &mut LEHeader, verbose: bool) {
     let mut current_page = 0;
     let mut reloc_idx = 0;
     // start with 0
@@ -156,7 +158,7 @@ fn output_le_relocations(obj_file: &object::File, le_header: &mut LEHeader) {
     let current_section = obj_file.section_by_name(".text").unwrap();
     let mut text_relocations: Vec<(u64, Relocation)> = current_section.relocations().collect();
     text_relocations.sort_by(|(loca, _), (locb, _)| loca.cmp(locb));
-    println!("\t[LE Text Relocations]");
+    if verbose { println!("\t[LE Text Relocations]"); }
     for (loc, rel) in text_relocations {
         match rel.target() {
             object::RelocationTarget::Symbol(s) => {
@@ -209,9 +211,10 @@ fn output_le_relocations(obj_file: &object::File, le_header: &mut LEHeader) {
                     // new page
                     le_header.fixup_page_offsets.push(reloc_idx);
                     current_page += 1;
-                    println!("\nFixup page rollover at {:05x} for page {}", reloc_idx, current_page);
+
+                    if verbose { println!("\nFixup page rollover at {:05x} for page {}", reloc_idx, current_page); }
                 }
-                print!("{}:0x{:05x}->{}:0x{:05x} ", current_page, loc, target_sec, target_offset);
+                if verbose { print!("{}:0x{:05x}->{}:0x{:05x} ", current_page, loc, target_sec, target_offset); }
                 if dwordoffset {
                     // 32-bit offset
                     reloc_idx += 2;
@@ -225,12 +228,12 @@ fn output_le_relocations(obj_file: &object::File, le_header: &mut LEHeader) {
         le_header.fixup_page_offsets.push(reloc_idx);
         current_page += 1;
     }
-    println!();
+    if verbose { println!(); }
     current_page = 0;
     let current_section = obj_file.section_by_name(".data").unwrap();
     let mut data_relocations: Vec<(u64, Relocation)> = current_section.relocations().collect();
     data_relocations.sort_by(|(loca, _), (locb, _)| loca.cmp(locb));
-    println!("\t[LE Data Relocations]");
+    if verbose { println!("\t[LE Data Relocations]"); }
     for (loc, rel) in data_relocations {
         match rel.target() {
             object::RelocationTarget::Symbol(s) => {
@@ -283,9 +286,9 @@ fn output_le_relocations(obj_file: &object::File, le_header: &mut LEHeader) {
                     // new page
                     le_header.fixup_page_offsets.push(reloc_idx);
                     current_page += 1;
-                    println!("\nFixup page rollover at {:05x} for page {}", reloc_idx, current_page);
+                    if verbose { println!("\nFixup page rollover at {:05x} for page {}", reloc_idx, current_page); }
                 }
-                print!("{}:0x{:05x}->{}:0x{:05x} ", current_page, loc, target_sec, target_offset);
+                if verbose { print!("{}:0x{:05x}->{}:0x{:05x} ", current_page, loc, target_sec, target_offset); }
                 if dwordoffset {
                     // 32-bit offset
                     reloc_idx += 2;
@@ -299,30 +302,29 @@ fn output_le_relocations(obj_file: &object::File, le_header: &mut LEHeader) {
         le_header.fixup_page_offsets.push(reloc_idx);
         current_page += 1;
     }
-    println!();
+    if verbose { println!(); }
     // End of Fixup page table
     le_header.fixup_page_offsets.push(reloc_idx);
 
     println!("{} bytes of relocations", reloc_idx);
 }
 
-fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = env::args().collect();
-    let path = &args[1];
-    let data = fs::read(path)?;
-    let obj_file = object::File::parse(&*data)?;
+fn convert(data: &[u8], verbose: bool) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let obj_file = object::File::parse(data)?;
 
-    for section in obj_file.sections() {
-        println!("\tSECTION [{}]\tKIND {}", section.name().unwrap(), match section.kind() {
-            object::SectionKind::Text => "text",
-            object::SectionKind::Data => "data",
-            object::SectionKind::ReadOnlyData => "rodata",
-            object::SectionKind::UninitializedData => "bss",
-            _ => "Other",
-        });
-        println!("\tRELOCATIONS FOR [{}]", section.name().unwrap());
-        print_section_relocations(&section, &obj_file);
-        println!();
+    if verbose {
+        for section in obj_file.sections() {
+            println!("\tSECTION [{}]\tKIND {}", section.name().unwrap(), match section.kind() {
+                object::SectionKind::Text => "text",
+                object::SectionKind::Data => "data",
+                object::SectionKind::ReadOnlyData => "rodata",
+                object::SectionKind::UninitializedData => "bss",
+                _ => "Other",
+            });
+            println!("\tRELOCATIONS FOR [{}]", section.name().unwrap());
+            print_section_relocations(&section, &obj_file);
+            println!();
+        }
     }
     for symbol in obj_file.symbols() {
         let sym_sec_idx = symbol.section_index();
@@ -336,13 +338,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         } else {
             "None"
         };
-        println!("SYMBOL [{}]\tKIND {}\tSECTION {}", symbol.name().unwrap(), match symbol.kind() {
+        if verbose { println!("SYMBOL [{}]\tKIND {}\tSECTION {}", symbol.name().unwrap(), match symbol.kind() {
             object::SymbolKind::Text => "Func",
             object::SymbolKind::Data => "Data",
             object::SymbolKind::Section => "Section",
             object::SymbolKind::Label => "Label",
             _ => "Other",
-        }, sym_sec_name);
+        }, sym_sec_name); } 
     }
 
     let mut new_elf = object::write::Object::new(object::BinaryFormat::Elf, object::Architecture::I386, object::Endianness::Little);
@@ -478,6 +480,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             match reloc.target() {
                 RelocationTarget::Symbol(sym_idx) => {
                     let old_sym = obj_file.symbol_by_index(sym_idx).unwrap();
+                    // ???????
+                    if old_sym.section_index().is_none() { continue }
                     let old_sec = obj_file.section_by_index(old_sym.section_index().unwrap()).unwrap();
                     let new_sym = if let Some(new_sym) = new_sym_map.get(old_sym.name().unwrap()) {
                         Some(new_sym)
@@ -498,7 +502,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                             symbol: *new,
                             addend: reloc.addend(),
                         })?;
-                        println!("reloc {:04x} in {} -> {} in {} {:04x}@{:04x} Became {:04x} in {} -> {} in {} ({:04x})",
+                        if verbose { println!("reloc {:04x} in {} -> {} in {} {:04x}@{:04x} Became {:04x} in {} -> {} in {} ({:04x})",
                             src,
                             section.name().unwrap(),
                             old_sym.name().unwrap(),
@@ -510,14 +514,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                             new_elf.symbol(*new).name().unwrap(),
                             new_elf.section(new_elf.symbol(*new).section.id().unwrap()).name().unwrap(),
                             new_elf.symbol(*new).value
-                        );
+                        ); }
                     } else {
-                        println!("Couldn't find new equivalent of {:04x} -> symbol {} in {} ({:04x}@{:04x})", src,
+                        if verbose { eprintln!("Warning: Couldn't find new equivalent of {:04x} -> symbol {} in {} ({:04x}@{:04x})", src,
                             old_sym.name().unwrap(),
                             old_sec.name().unwrap(),
                             old_sym.address(),
                             old_sec.address()
-                        );
+                        ); }
                     }
                 },
                 _ => { panic!("Unsupported Relocation Type"); },
@@ -530,12 +534,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         new_elf.write_stream(&mut out_elf)?;
     }
 
-    println!("\n\n\tWrote [new.elf]! Trying to produce LE executable.");
+    if verbose { print!("\n\n\t"); }
+    println!("Wrote [new.elf]! Trying to produce LE executable.");
 
     let new_file = fs::read("new.elf")?;
     let new_obj = object::File::parse(&*new_file)?;
 
-    println!();
+    if verbose { println!(); }
     let text_len = new_obj.section_by_name(".text").unwrap().data().unwrap().len();
     let data_len = new_obj.section_by_name(".data").unwrap().data().unwrap().len();
     let text_pages = if text_len % 0x1000 == 0 {
@@ -551,12 +556,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     println!("[.text] size: 0x{:08x} ({} pages)", text_len, text_pages);
     println!("[.data] size: 0x{:08x} ({} pages)", data_len, data_pages);
 
-    let text_sec = new_obj.section_by_name(".text").unwrap();
-    println!("\n\tRELOCATIONS FOR [.text]");
-    print_section_relocations(&text_sec, &new_obj);
-    println!("\n\tRELOCATIONS FOR [.data]");
-    let data_sec = new_obj.section_by_name(".data").unwrap();
-    print_section_relocations(&data_sec, &new_obj);
+    if verbose {
+        let text_sec = new_obj.section_by_name(".text").unwrap();
+        println!("\n\tRELOCATIONS FOR [.text]");
+        print_section_relocations(&text_sec, &new_obj);
+        println!("\n\tRELOCATIONS FOR [.data]");
+        let data_sec = new_obj.section_by_name(".data").unwrap();
+        print_section_relocations(&data_sec, &new_obj);
+    }
 
     let le_stub: Vec<u8> = Vec::from(*LE_STUB);
     let mut out_file = fs::File::create("a.exe")?;
@@ -569,12 +576,30 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         fixup_page_offsets: Vec::new(),
         fixup_records: Vec::new(),
     };
-    output_le_relocations(&new_obj, &mut header);
+    output_le_relocations(&new_obj, &mut header, verbose);
     let data_pages_offset = write_le_header(&header, &mut out_file)?;
     println!("Data Pages Offset: 0x{:04x}", data_pages_offset);
     out_file.write_all_at(new_obj.section_by_name(".text").unwrap().data().unwrap(), data_pages_offset as u64)?;
     let data_loc = (header.num_text_pages * 0x1000) + data_pages_offset;
     out_file.write_all_at(new_obj.section_by_name(".data").unwrap().data().unwrap(), data_loc as u64)?;
+
+    println!("Wrote a.exe, {} bytes.", data_loc as usize + new_obj.section_by_name(".data").unwrap().data().unwrap().len());
+
+    Ok(())
+}
+
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() < 2 { eprintln!("Not enough args"); }
+
+    let verbose = args[1] == "-v";
+
+    if verbose && args.len() < 3 { eprintln!("Not enough args"); }
+
+    let path = if verbose { &args[2] } else { &args[1] };
+    let data = fs::read(path)?;
+    convert(&data, verbose)?;
 
     Ok(())
 }
