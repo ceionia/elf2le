@@ -144,7 +144,9 @@ fn write_le_header(new_header: &LEHeader, le_stub: &mut std::fs::File) -> std::r
     //let data_pages_offset = 0x1000 +
     //    ((new_header.fixup_records.len() + new_header.fixup_page_offsets.len() * 4 + 0x68 + le_header_offset as usize) / 0x1000) * 0x1000;
     //le_stub.write_at(&(data_pages_offset as u32).to_le_bytes(), le_header_offset + 0x80)?;
-    let data_pages_offset = ((le_stub.stream_position()? >> 12) + 1) << 12;
+
+    //let data_pages_offset = ((le_stub.stream_position()? >> 12) + 1) << 12;
+    let data_pages_offset = le_stub.stream_position()?;
     le_stub.write_at(&(data_pages_offset as u32).to_le_bytes(), le_header_offset + 0x80)?;
 
     Ok(data_pages_offset as u32)
